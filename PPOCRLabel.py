@@ -23,6 +23,7 @@ import subprocess
 import sys
 import traceback
 from functools import partial
+from copy import deepcopy
 
 import openpyxl
 import cv2
@@ -73,7 +74,6 @@ from PyQt5.QtWidgets import (
     QAction,
     QPushButton,
 )
-
 __dir__ = os.path.dirname(__file__)
 sys.path.append(os.path.join(__dir__, ""))
 
@@ -138,10 +138,10 @@ class MainWindow(QMainWindow):
     def __init__(
         self,
         lang="ch",
-        gpu=False,
+        gpu=True,
         img_list_natural_sort=True,
         bbox_auto_zoom_center=False,
-        kie_mode=False,
+        kie_mode=True,
         default_filename=None,
         default_predefined_class_file=None,
         default_save_dir=None,
@@ -170,7 +170,7 @@ class MainWindow(QMainWindow):
         if lang not in ["ch", "en"]:
             lang = "en"
         self.stringBundle = StringBundle.getBundle(
-            localeStr="zh-CN" if lang == "ch" else "en"
+            "en"
         )  # 'en'
 
         def getStr(strId):
@@ -188,12 +188,11 @@ class MainWindow(QMainWindow):
             "use_pdserving": False,
             "use_angle_cls": True,
             "det": True,
-            "cls": True,
+            "cls": False,
             "use_gpu": gpu,
             "lang": lang,
             "show_log": False,
         }
-
         if det_model_dir is not None:
             params["det_model_dir"] = det_model_dir
         if rec_model_dir is not None:
@@ -203,7 +202,7 @@ class MainWindow(QMainWindow):
         if cls_model_dir is not None:
             params["cls_model_dir"] = cls_model_dir
 
-        self.ocr = PaddleOCR(**params)
+        self.ocr = PaddleOCR(det=True, cls=False, use_angle_cls=True, use_gpu=gpu, lang='ar') 
         self.table_ocr = PPStructure(
             use_pdserving=False, use_gpu=gpu, lang=lang, layout=False, show_log=False
         )
