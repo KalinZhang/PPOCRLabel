@@ -1,3 +1,4 @@
+# Copyright (c) <2015-Present> Tzutalin
 # Copyright (C) 2013  MIT, Computer Science and Artificial Intelligence Laboratory. Bryan Russell, Antonio Torralba,
 # William T. Freeman. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
 # associated documentation files (the "Software"), to deal in the Software without restriction, including without
@@ -2788,12 +2789,11 @@ class MainWindow(QMainWindow):
             if selected_item in self.itemsToShapesbox:
                 shape = self.itemsToShapesbox[selected_item]
                 
-                # 确保在 canvas 中选中这个形状
+                # 先选中要删除的形状
                 self.canvas.selectedShapes = [shape]
                 
                 # 从 canvas 中删除
-                if shape in self.canvas.shapes:
-                    self.canvas.shapes.remove(shape)
+                self.canvas.deleteSelected()
                 
                 # 从标签列表中删除
                 if shape in self.shapesToItems:
@@ -2806,9 +2806,6 @@ class MainWindow(QMainWindow):
                 self.BoxList.takeItem(self.BoxList.row(selected_item))
                 del self.shapesToItemsbox[shape]
                 del self.itemsToShapesbox[selected_item]
-                
-                # 清除 canvas 的选中状态
-                self.canvas.selectedShapes = []
                 
                 # 更新索引列表
                 self.updateIndexList()
@@ -2836,6 +2833,281 @@ class MainWindow(QMainWindow):
             print(f"Warning: Failed to delete shape - {str(e)}")
             import traceback
             traceback.print_exc()
+
+    def chshapeLineColor(self):
+        color = self.colorDialog.getColor(
+            self.lineColor, "Choose line color", default=DEFAULT_LINE_COLOR
+        )
+        if color:
+            for shape in self.canvas.selectedShapes:
+                shape.line_color = color
+            self.canvas.update()
+            self.setDirty()
+
+    def chshapeFillColor(self):
+        color = self.colorDialog.getColor(
+            self.fillColor, "Choose fill color", default=DEFAULT_FILL_COLOR
+        )
+        if color:
+            for shape in self.canvas.selectedShapes:
+                shape.fill_color = color
+            self.canvas.update()
+            self.setDirty()
+
+    def copyShape(self):
+        self.canvas.endMove(copy=True)
+        self.addLabel(self.canvas.selectedShape)
+        self.setDirty()
+
+    def moveShape(self):
+        self.canvas.endMove(copy=False)
+        self.setDirty()
+
+    def loadPredefinedClasses(self, predefClassesFile):
+        if os.path.exists(predefClassesFile) is True:
+            with codecs.open(predefClassesFile, "r", "utf8") as f:
+                for line in f:
+                    line = line.strip()
+                    if self.labelHist is None:
+                        self.labelHist = [line]
+                    else:
+                        self.labelHist.append(line)
+
+    def togglePaintLabelsOption(self):
+        self.displayIndexOption.setChecked(False)
+        for shape in self.canvas.shapes:
+            shape.paintLabel = self.displayLabelOption.isChecked()
+            shape.paintIdx = self.displayIndexOption.isChecked()
+        self.canvas.repaint()
+
+    def togglePaintIndexOption(self):
+        self.displayLabelOption.setChecked(False)
+        for shape in self.canvas.shapes:
+            shape.paintLabel = self.displayLabelOption.isChecked()
+            shape.paintIdx = self.displayIndexOption.isChecked()
+        self.canvas.repaint()
+
+    def toogleDrawSquare(self):
+        self.canvas.setDrawingShapeToSquare(self.drawSquaresOption.isChecked())
+
+    def additems(self, dirpath):
+        for file in self.mImgList:
+            pix = QPixmap(file)
+            _, filename = os.path.split(file)
+            filename, _ = os.path.splitext(filename)
+            item = QListWidgetItem(
+                QIcon(
+                    pix.scaled(100, 100, Qt.IgnoreAspectRatio, Qt.FastTransformation)
+                ),
+                filename[:10],
+            )
+            item.setToolTip(file)
+            self.iconlist.addItem(item)
+
+    def additems5(self, dirpath):
+        for file in self.mImgList5:
+            pix = QPixmap(file)
+            _, filename = os.path.split(file)
+            filename, _ = os.path.splitext(filename)
+            pfilename = filename[:10]
+            if len(pfilename) < 10:
+                lentoken = 12 - len(pfilename)
+                prelen = lentoken // 2
+                bfilename = prelen * " " + pfilename + (lentoken - prelen) * " "
+            # item = QListWidgetItem(QIcon(pix.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)),filename[:10])
+            item = QListWidgetItem(
+                QIcon(
+                    pix.scaled(100, 100, Qt.IgnoreAspectRatio, Qt.FastTransformation)
+                ),
+                pfilename,
+            )
+            # item.setForeground(QBrush(Qt.white))
+            item.setToolTip(file)
+            self.iconlist.addItem(item)
+        owidth = 0
+        for index in range(len(self.mImgList5)):
+            item = self.iconlist.item(index)
+            itemwidget = self.iconlist.visualItemRect(item)
+            owidth += itemwidget.width()
+        self.iconlist.setMinimumWidth(owidth + 50)
+
+    def gen_quad_from_poly(self, poly):
+        """
+        Generate min area quad from poly.
+        """
+        point_num = poly.shape[0]
+        min_area_quad = np.zeros((4, 2), dtype=np.float32)
+        rect = cv2.minAreaRect(
+            poly.astype(np.int32)
+        )  # (center (x,y), (width, height), angle of rotation)
+        box = np.array(cv2.boxPoints(rect))
+
+        first_point_idx = 0
+        min_dist = 1e4
+        for i in range(4):
+            dist = (
+                np.linalg.norm(box[(i + 0) % 4] - poly[0])
+                + np.linalg.norm(box[(i + 1) % 4] - poly[point_num // 2 - 1])
+                + np.linalg.norm(box[(i + 2) % 4] - poly[point_num // 2])
+                + np.linalg.norm(box[(i + 3) % 4] - poly[-1])
+            )
+            if dist < min_dist:
+                min_dist = dist
+                first_point_idx = i
+        for i in range(4):
+            min_area_quad[i] = box[(first_point_idx + i) % 4]
+
+        bbox_new = min_area_quad.tolist()
+        bbox = []
+
+        for box in bbox_new:
+            box = list(map(int, box))
+            bbox.append(box)
+
+        return bbox
+
+    def getImglabelidx(self, filename):
+        if platform.system() == "Windows":
+            spliter = "\\"
+        else:
+            spliter = "/"
+        filepathsplit = filename.split(spliter)[-2:]
+        if len(filepathsplit) == 1:
+            return filename
+        return filepathsplit[0] + "/" + filepathsplit[1]
+
+    def autoRecognition(self):
+        assert self.mImgList is not None
+        print("Using model from ", self.model)
+
+        uncheckedList = [i for i in self.mImgList if i not in self.fileStatedict.keys()]
+        self.autoDialog = AutoDialog(
+            parent=self, ocr=self.ocr, mImgList=uncheckedList, lenbar=len(uncheckedList)
+        )
+        self.autoDialog.popUp()
+        self.currIndex = len(self.mImgList) - 1
+        self.loadFile(self.filePath)  # ADD
+        self.haveAutoReced = True
+        self.AutoRecognition.setEnabled(False)
+        self.actions.AutoRec.setEnabled(False)
+        self.setDirty()
+        self.saveCacheLabel()
+
+        self.init_key_list(self.Cachelabel)
+
+    def reRecognition(self):
+        img = cv2.imdecode(np.fromfile(self.filePath, dtype=np.uint8), 1)
+        # org_box = [dic['points'] for dic in self.PPlabel[self.getImglabelidx(self.filePath)]]
+        if self.canvas.shapes:
+            self.result_dic = []
+            self.result_dic_locked = (
+                []
+            )  # result_dic_locked stores the ocr result of self.canvas.lockedShapes
+            rec_flag = 0
+            for shape in self.canvas.shapes:
+                box = [[int(p.x()), int(p.y())] for p in shape.points]
+                kie_cls = shape.key_cls
+
+                if len(box) > 4:
+                    box = self.gen_quad_from_poly(np.array(box))
+                assert len(box) == 4
+
+                img_crop = get_rotate_crop_image(img, np.array(box, np.float32))
+                if img_crop is None:
+                    msg = (
+                        "Can not recognise the detection box in "
+                        + self.filePath
+                        + ". Please change manually"
+                    )
+                    QMessageBox.information(self, "Information", msg)
+                    return
+                result = self.ocr.ocr(img_crop, cls=True, det=False)[0]
+                if result[0][0] != "":
+                    if shape.line_color == DEFAULT_LOCK_COLOR:
+                        shape.label = result[0][0]
+                        result.insert(0, box)
+                        if self.kie_mode:
+                            result.append(kie_cls)
+                        self.result_dic_locked.append(result)
+                    else:
+                        result.insert(0, box)
+                        if self.kie_mode:
+                            result.append(kie_cls)
+                        self.result_dic.append(result)
+                else:
+                    print("Can not recognise the box")
+                    if shape.line_color == DEFAULT_LOCK_COLOR:
+                        shape.label = result[0][0]
+                        if self.kie_mode:
+                            self.result_dic_locked.append(
+                                [box, (self.noLabelText, 0), kie_cls]
+                            )
+                        else:
+                            self.result_dic_locked.append([box, (self.noLabelText, 0)])
+                    else:
+                        if self.kie_mode:
+                            self.result_dic.append(
+                                [box, (self.noLabelText, 0), kie_cls]
+                            )
+                        else:
+                            self.result_dic.append([box, (self.noLabelText, 0)])
+                try:
+                    if self.noLabelText == shape.label or result[1][0] == shape.label:
+                        print("label no change")
+                    else:
+                        rec_flag += 1
+                except IndexError as e:
+                    print("Can not recognise the box")
+            if (len(self.result_dic) > 0 and rec_flag > 0) or self.canvas.lockedShapes:
+                self.canvas.isInTheSameImage = True
+                self.saveFile(mode="Auto")
+                self.loadFile(self.filePath, isAdjustScale=False)
+                self.canvas.isInTheSameImage = False
+                self.setDirty()
+            elif len(self.result_dic) == len(self.canvas.shapes) and rec_flag == 0:
+                if self.lang == "ch":
+                    QMessageBox.information(self, "Information", "识别结果保持一致！")
+                else:
+                    QMessageBox.information(
+                        self, "Information", "The recognition result remains unchanged!"
+                    )
+            else:
+                print("Can not recgonise in ", self.filePath)
+        else:
+            QMessageBox.information(self, "Information", "Draw a box!")
+
+    def singleRerecognition(self):
+        img = cv2.imdecode(np.fromfile(self.filePath, dtype=np.uint8), 1)
+        for shape in self.canvas.selectedShapes:
+            box = [[int(p.x()), int(p.y())] for p in shape.points]
+            if len(box) > 4:
+                box = self.gen_quad_from_poly(np.array(box))
+            assert len(box) == 4
+            img_crop = get_rotate_crop_image(img, np.array(box, np.float32))
+            if img_crop is None:
+                msg = (
+                    "Can not recognise the detection box in "
+                    + self.filePath
+                    + ". Please change manually"
+                )
+                QMessageBox.information(self, "Information", msg)
+                return
+            result = self.ocr.ocr(img_crop, cls=True, det=False)[0]
+            if result[0][0] != "":
+                result.insert(0, box)
+                print("result in reRec is ", result)
+                if result[1][0] == shape.label:
+                    print("label no change")
+                else:
+                    shape.label = result[1][0]
+            else:
+                print("Can not recognise the box")
+                if self.noLabelText == shape.label:
+                    print("label no change")
+                else:
+                    shape.label = self.noLabelText
+            self.singleLabel(shape)
+            self.setDirty()
 
     def TableRecognition(self):
         """

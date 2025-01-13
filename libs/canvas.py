@@ -566,12 +566,14 @@ class Canvas(QWidget):
         print("Canvas: deleteSelected called")
         if self.selectedShapes:
             print(f"Canvas: Deleting {len(self.selectedShapes)} shapes")
-            for shape in self.selectedShapes[:]:  # 使用副本进行迭代
+            deleted = []
+            for shape in self.selectedShapes:
                 if shape in self.shapes:
                     self.shapes.remove(shape)
-            self.storeShapes()
+                    deleted.append(shape)
             self.selectedShapes = []
             self.update()
+            print(f"Canvas: Successfully deleted {len(deleted)} shapes")
             return True
         print("Canvas: No shapes selected to delete")
         return False
