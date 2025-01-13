@@ -60,6 +60,7 @@ class Shape(object):
         self.label = label
         self.idx = None  # bbox order, only for table annotation
         self.points = []
+        self.confirmed = False  # 新增属性，标记是否已确认
         self.fill = False
         self.selected = False
         self.difficult = difficult
@@ -85,6 +86,8 @@ class Shape(object):
             # with an object attribute. Currently this
             # is used for drawing the pending line a different color.
             self.line_color = line_color
+        else:
+            self.line_color = Shape.line_color
 
     def rotate(self, theta):
         for i, p in enumerate(self.points):

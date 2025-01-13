@@ -24,15 +24,43 @@ BB = QDialogButtonBox
 
 
 class LabelDialog(QDialog):
-    def __init__(self, text="Enter object label", parent=None, listItem=None):
+    def __init__(self, text="", parent=None, listItem=None):
         super(LabelDialog, self).__init__(parent)
-
-        self.edit = QLineEdit()  # OLD
-        # self.edit = QTextEdit()
+        self.setWindowTitle("输入文本")
+        
+        # 设置对话框字体
+        font = QFont()
+        # 尝试使用支持叙利亚文的字体
+        font_families = [
+            "Estrangelo Edessa",
+            "Noto Sans Syriac",
+            "East Syriac Adiabene",
+            "Serto Jerusalem",
+            "Microsoft Sans Serif",
+            "Arial Unicode MS",
+            "Arial"
+        ]
+        
+        # 修正字体检查方法
+        db = QFontDatabase()
+        available_families = db.families()
+        for family in font_families:
+            if family in available_families:
+                font.setFamily(family)
+                break
+        
+        font.setPointSize(12)
+        self.setFont(font)
+        
+        # 设置文本框
+        self.edit = QLineEdit()
         self.edit.setText(text)
-        # self.edit.setValidator(labelValidator()) # 验证有效性
-        self.edit.editingFinished.connect(self.postProcess)
-
+        self.edit.setFont(font)
+        self.edit.setLayoutDirection(Qt.RightToLeft)  # 设置文本方向为从右到左
+        
+        # 设置编码
+        self.edit.setInputMethodHints(Qt.ImhNone)  # 允许所有输入法
+        
         model = QStringListModel()
         model.setStringList(listItem)
         completer = QCompleter()

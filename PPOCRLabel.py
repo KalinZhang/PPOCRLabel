@@ -1,4 +1,3 @@
-# Copyright (c) <2015-Present> Tzutalin
 # Copyright (C) 2013  MIT, Computer Science and Artificial Intelligence Laboratory. Bryan Russell, Antonio Torralba,
 # William T. Freeman. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
 # associated documentation files (the "Software"), to deal in the Software without restriction, including without
@@ -46,7 +45,8 @@ from PyQt5.QtGui import (
     QImageReader,
     QColor,
     QIcon,
-    QFontDatabase,
+    QFont,
+    QFontDatabase,  # QFontDatabase 应该在 QtGui 中导入
 )
 from PyQt5.QtWidgets import (
     QMainWindow,
@@ -202,7 +202,18 @@ class MainWindow(QMainWindow):
         if cls_model_dir is not None:
             params["cls_model_dir"] = cls_model_dir
 
-        self.ocr = PaddleOCR(det=True, cls=False, use_angle_cls=True, use_gpu=gpu, lang='ar') 
+        self.ocr = PaddleOCR(
+            det=True,
+            cls=False, 
+            use_angle_cls=True,
+            use_gpu=gpu,
+            lang='ar',  # 设置为阿拉伯语
+            rec_algorithm='SVTR_LCNet',
+            rec_image_shape='3, 48, 320',
+            rec_batch_num=1,
+            det_limit_side_len=2880,
+            det_limit_type='max'
+        )
         self.table_ocr = PPStructure(
             use_pdserving=False, use_gpu=gpu, lang=lang, layout=False, show_log=False
         )
@@ -548,12 +559,12 @@ class MainWindow(QMainWindow):
             getStr("tipchoosemodel"),
         )
 
-        deleteImg = action(
-            getStr("deleteImg"),
-            self.deleteImg,
+        deleteBox = action(
+            "delete current box",
+            self.deleteSelectedShape,
             "Ctrl+Shift+D",
-            "close",
-            getStr("deleteImgDetail"),
+            "close", 
+            "Delete the selected box",
             enabled=True,
         )
 
@@ -869,7 +880,7 @@ class MainWindow(QMainWindow):
         self.editButton.setDefaultAction(edit)
         self.newButton.setDefaultAction(create)
         self.createpolyButton.setDefaultAction(createpoly)
-        self.DelButton.setDefaultAction(deleteImg)
+        self.DelButton.setDefaultAction(deleteBox)
         self.SaveButton.setDefaultAction(save)
         self.AutoRecognition.setDefaultAction(AutoRec)
         self.reRecogButton.setDefaultAction(reRec)
@@ -929,7 +940,7 @@ class MainWindow(QMainWindow):
         self.actions = struct(
             save=save,
             resetAll=resetAll,
-            deleteImg=deleteImg,
+            deleteBox=deleteBox,
             lineColor=color1,
             create=create,
             createpoly=createpoly,
@@ -1019,6 +1030,14 @@ class MainWindow(QMainWindow):
             ),
             onLoadActive=(create, createpoly, createMode, editMode),
             onShapesPresent=(hideAll, showAll),
+            saveAsJson=action(
+                self.tr("&Save As JSON"),
+                self.saveFileAsJson,
+                "Ctrl+Alt+S",
+                "save",
+                self.tr("Save labels to json file"),
+                enabled=True,
+            ),
         )
 
         # menus
@@ -1089,9 +1108,9 @@ class MainWindow(QMainWindow):
                 self.autoSaveOption,
                 self.autoReRecognitionOption,
                 self.autoSaveUnsavedChangesOption,
-                None,
+                self.actions.saveAsJson,  # 添加新的菜单项
                 resetAll,
-                deleteImg,
+                deleteBox,
                 quit,
             ),
         )
@@ -1121,7 +1140,8 @@ class MainWindow(QMainWindow):
         self.menus.file.aboutToShow.connect(self.updateFileMenu)
 
         # Custom context menu for the canvas widget:
-        addActions(self.canvas.menus[0], self.actions.beginnerContext)
+        if self.canvas.menu:
+            addActions(self.canvas.menu, self.actions.beginnerContext)
 
         self.statusBar().showMessage("%s started." % __appname__)
         self.statusBar().show()
@@ -1211,6 +1231,19 @@ class MainWindow(QMainWindow):
         # selected shape color
         self.selected_shape_color = selected_shape_color
 
+        # 在初始化结束时，设置默认为创建矩形框模式
+        self.actions.create.setEnabled(True)
+        self.actions.create.setChecked(True)
+        self.toggleDrawMode(True)
+        self.canvas.setDrawingShapeToSquare(False)
+
+        # 修改右键菜单初始化
+        if self.canvas.menu:
+            self.canvas.menu.clear()
+            # 只添加删除选项
+            deleteAction = self.canvas.menu.addAction(self.tr("删除"))
+            deleteAction.triggered.connect(self.canvas.deleteSelected)
+
     def menu(self, title, actions=None):
         menu = self.menuBar().addMenu(title)
         if actions:
@@ -1223,24 +1256,38 @@ class MainWindow(QMainWindow):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Control:
-            # Draw rectangle if Ctrl is pressed
             self.canvas.setDrawingShapeToSquare(True)
+        elif event.key() == Qt.Key_Escape:
+            print("PPOCRLabel: ESC key pressed")
+            # 让 canvas 处理 ESC 键事件
+            self.canvas.keyPressEvent(event)
+            # 更新界面状态
+            self.actions.create.setChecked(False)
+            self.toggleDrawMode(True)  # 切换到编辑模式
 
     def noShapes(self):
         return not self.itemsToShapes
 
     def populateModeActions(self):
-        self.canvas.menus[0].clear()
-        addActions(self.canvas.menus[0], self.actions.beginnerContext)
+        """
+        更新菜单动作
+        """
+        # 不再需要处理右键菜单，因为我们只保留删除选项
+        
         self.menus.edit.clear()
-        actions = (
-            self.actions.create,
-        )  # if self.beginner() else (self.actions.createMode, self.actions.editMode)
+        actions = (self.actions.create,)
         addActions(self.menus.edit, actions + self.actions.editMenu)
 
     def setDirty(self):
+        """
+        设置为已修改状态，并自动保存到缓存
+        """
         self.dirty = True
-        self.actions.save.setEnabled(True)
+        if hasattr(self.actions, 'save'):
+            self.actions.save.setEnabled(True)
+        
+        # 自动保存到 Label.txt
+        self.saveLabelFile()
 
     def setClean(self):
         self.dirty = False
@@ -1399,18 +1446,33 @@ class MainWindow(QMainWindow):
             self.actions.createpoly.setEnabled(True)
 
     def toggleDrawMode(self, edit=True):
+        print(f"PPOCRLabel: Toggle draw mode called, edit={edit}")
         self.canvas.setEditing(edit)
         self.actions.createMode.setEnabled(edit)
         self.actions.editMode.setEnabled(not edit)
+        
+    def deleteSelected(self):
+        print("PPOCRLabel: deleteSelected called")
+        if self.canvas.deleteSelected():
+            print("PPOCRLabel: Shape deleted successfully")
+            self.setDirty()
+            self.canvas.update()
+        else:
+            print("PPOCRLabel: No shape deleted")
 
     def setCreateMode(self):
         assert self.advanced()
         self.toggleDrawMode(False)
 
     def setEditMode(self):
-        assert self.advanced()
+        """
+        设置编辑模式
+        """
         self.toggleDrawMode(True)
-        self.labelSelectionChanged()
+        self.actions.createMode.setEnabled(True)
+        self.actions.editMode.setEnabled(True)
+        if self.canvas.menu:
+            self.canvas.menu.setEnabled(True)  # 确保右键菜单可用
 
     def updateFileMenu(self):
         currFilePath = self.filePath
@@ -1547,90 +1609,82 @@ class MainWindow(QMainWindow):
             self.zoomWidget.setValue(self.imageSlider.value())
 
     def shapeSelectionChanged(self, selected_shapes):
+        """
+        处理形状选择变化
+        """
         self._noSelectionSlot = True
         for shape in self.canvas.selectedShapes:
-            shape.selected = False
-        self.labelList.clearSelection()
-        self.indexList.clearSelection()
-        self.canvas.selectedShapes = selected_shapes
-        for shape in self.canvas.selectedShapes:
-            shape.selected = True
-            self.shapesToItems[shape].setSelected(True)
-            self.shapesToItemsbox[shape].setSelected(True)
-            index = self.labelList.indexFromItem(self.shapesToItems[shape]).row()
-            self.indexList.item(index).setSelected(True)
-
-        self.labelList.scrollToItem(
-            self.currentItem()
-        )  # QAbstractItemView.EnsureVisible
-        # map current label item to index item and select it
-        index = self.labelList.indexFromItem(self.currentItem()).row()
-        self.indexList.scrollToItem(self.indexList.item(index))
-        self.BoxList.scrollToItem(self.currentBox())
-
-        if self.kie_mode:
-            if len(self.canvas.selectedShapes) == 1 and self.keyList.count() > 0:
-                selected_key_item_row = self.keyList.findItemsByLabel(
-                    self.canvas.selectedShapes[0].key_cls, get_row=True
-                )
-                if (
-                    isinstance(selected_key_item_row, list)
-                    and len(selected_key_item_row) == 0
-                ):
-                    key_text = self.canvas.selectedShapes[0].key_cls
-                    item = self.keyList.createItemFromLabel(key_text)
-                    self.keyList.addItem(item)
-                    rgb = self._get_rgb_by_label(key_text, self.kie_mode)
-                    self.keyList.setItemLabel(item, key_text, rgb)
-                    selected_key_item_row = self.keyList.findItemsByLabel(
-                        self.canvas.selectedShapes[0].key_cls, get_row=True
-                    )
-
-                self.keyList.setCurrentRow(selected_key_item_row)
-
+            try:
+                if shape in self.shapesToItems:  # 添加检查
+                    self.shapesToItems[shape].setSelected(True)
+                    if shape in self.shapesToItemsbox:
+                        self.shapesToItemsbox[shape].setSelected(True)
+            except KeyError:
+                # 如果形状不在映射中，可能是因为取消创建，直接跳过
+                continue
         self._noSelectionSlot = False
         n_selected = len(selected_shapes)
-        self.actions.singleRere.setEnabled(n_selected)
-        self.actions.cellreRec.setEnabled(n_selected)
-        self.actions.delete.setEnabled(n_selected)
-        self.actions.copy.setEnabled(n_selected)
-        self.actions.edit.setEnabled(n_selected == 1)
-        self.actions.lock.setEnabled(n_selected)
-        self.actions.change_cls.setEnabled(n_selected)
-        self.actions.expand.setEnabled(n_selected)
+        
+        # 只启用实际存在的动作
+        if hasattr(self.actions, 'delete'):
+            self.actions.delete.setEnabled(n_selected)
+        if hasattr(self.actions, 'copy'):
+            self.actions.copy.setEnabled(n_selected)
+        if hasattr(self.actions, 'edit'):
+            self.actions.edit.setEnabled(n_selected == 1)
+        
+        # 更新显示
+        if n_selected:
+            self.labelList.scrollToItem(self.currentItem())
+            self.BoxList.scrollToItem(self.currentBox())
+            
+            # 如果在KIE模式下且选中了单个形状
+            if self.kie_mode and n_selected == 1:
+                self.updateKeyList(selected_shapes[0])
 
     def addLabel(self, shape):
         shape.paintLabel = self.displayLabelOption.isChecked()
         shape.paintIdx = self.displayIndexOption.isChecked()
 
-        item = HashableQListWidgetItem(shape.label)
-        # current difficult checkbox is disenble
-        # item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-        # item.setCheckState(Qt.Unchecked) if shape.difficult else item.setCheckState(Qt.Checked)
+        # 创建标签项，特殊处理空文本框
+        display_label = "[空文本框]" if shape.label == "[Empty]" else shape.label
+        item = HashableQListWidgetItem(display_label)
+        
+        # 为空文本框设置特殊样式
+        if shape.label == "[Empty]":
+            item.setForeground(QColor(128, 128, 128))  # 灰色文本
+            font = item.font()
+            font.setItalic(True)  # 斜体
+            item.setFont(font)
 
-        # Checked means difficult is False
-        # item.setBackground(generateColorByText(shape.label))
         self.itemsToShapes[item] = shape
         self.shapesToItems[shape] = item
-        # add current label item index before label string
+        
+        # 添加索引
         current_index = QListWidgetItem(str(self.labelList.count()))
         current_index.setTextAlignment(Qt.AlignHCenter)
         self.indexList.addItem(current_index)
         self.labelList.addItem(item)
-        # print('item in add label is ',[(p.x(), p.y()) for p in shape.points], shape.label)
 
-        # ADD for box
+        # 添加坐标框信息
         item = HashableQListWidgetItem(
             str([(int(p.x()), int(p.y())) for p in shape.points])
         )
+        if shape.label == "[Empty]":
+            item.setForeground(QColor(128, 128, 128))
+            font = item.font()
+            font.setItalic(True)
+            item.setFont(font)
+            
         self.itemsToShapesbox[item] = shape
         self.shapesToItemsbox[shape] = item
         self.BoxList.addItem(item)
+        
         for action in self.actions.onShapesPresent:
             action.setEnabled(True)
         self.updateComboBox()
 
-        # update show counting
+        # 更新显示计数
         self.BoxListDock.setWindowTitle(
             self.BoxListDockName + f" ({self.BoxList.count()})"
         )
@@ -1659,33 +1713,35 @@ class MainWindow(QMainWindow):
 
     def loadLabels(self, shapes):
         s = []
-        shape_index = 0
         for label, points, line_color, key_cls, difficult in shapes:
-            shape = Shape(
-                label=label,
-                line_color=line_color,
-                key_cls=key_cls,
-                font_family=self.label_font_family,
-            )
-            for x, y in points:
-                # Ensure the labels are within the bounds of the image. If not, fix them.
-                x, y, snapped = self.canvas.snapPointToCanvas(x, y)
-                if snapped:
-                    self.setDirty()
-
-                shape.addPoint(QPointF(x, y))
+            shape = Shape(label=label, key_cls=key_cls)
+            
+            # 如果 points 是 QPointF 对象的列表
+            if isinstance(points[0], QPointF):
+                for p in points:
+                    shape.addPoint(p)
+            # 如果 points 是坐标列表 [[x1,y1], [x2,y2],...]
+            else:
+                for x, y in points:
+                    shape.addPoint(QPointF(x, y))
+                
             shape.difficult = difficult
-            shape.idx = shape_index
-            shape_index += 1
-            # shape.locked = False
             shape.close()
+            
+            # 设置颜色
+            if line_color:
+                shape.line_color = QColor(*line_color)
+            else:
+                # 使用默认颜色
+                shape.line_color = QColor(0, 255, 0)
+                
+            shape.fill_color = QColor(0, 255, 0, 128)
+            shape.selected = False
+            shape.paintLabel = self.displayLabelOption.isChecked()
+            
             s.append(shape)
-
-            self._update_shape_color(shape)
-            self.addLabel(shape)
-
-        self.updateComboBox()
-        self.canvas.loadShapes(s)
+        
+        self.loadShapes(s)
 
     def singleLabel(self, shape):
         if shape is None:
@@ -1884,58 +1940,36 @@ class MainWindow(QMainWindow):
         self.setDirty()
 
     # Callback functions:
-    def newShape(self, value=True):
-        """Pop-up and give focus to the label editor.
-
-        position MUST be in global coordinates.
+    def newShape(self, auto_label=False):
         """
-        if len(self.labelHist) > 0:
-            self.labelDialog = LabelDialog(parent=self, listItem=self.labelHist)
-
-        if value:
-            text = self.labelDialog.popUp(text=self.prevLabelText)
-            self.lastLabel = text
-        else:
+        创建新框后自动保存，允许空文本框
+        """
+        text = None
+        if auto_label:
             text = self.prevLabelText
-
-        if text is not None:
-            self.prevLabelText = self.stringBundle.getString("tempLabel")
-
-            shape = self.canvas.setLastLabel(
-                text, None, None, None
-            )  # generate_color, generate_color
-            if self.kie_mode:
-                key_text, _ = self.keyDialog.popUp(self.key_previous_text)
-                if key_text is not None:
-                    shape = self.canvas.setLastLabel(
-                        text, None, None, key_text
-                    )  # generate_color, generate_color
-                    self.key_previous_text = key_text
-                    if not self.keyList.findItemsByLabel(key_text):
-                        item = self.keyList.createItemFromLabel(key_text)
-                        self.keyList.addItem(item)
-                        rgb = self._get_rgb_by_label(key_text, self.kie_mode)
-                        self.keyList.setItemLabel(item, key_text, rgb)
-
-                    self._update_shape_color(shape)
-                    self.keyDialog.addLabelHistory(key_text)
-
-            self.addLabel(shape)
-            if self.beginner():  # Switch to edit mode.
-                self.canvas.setEditing(True)
-                self.actions.create.setEnabled(True)
-                self.actions.createpoly.setEnabled(True)
-                self.actions.undoLastPoint.setEnabled(False)
-                self.actions.undo.setEnabled(True)
-            else:
-                self.actions.editMode.setEnabled(True)
-            self.setDirty()
-
-            if self.autoReRecognitionOption.isChecked():
-                self.reRecognition()
         else:
-            # self.canvas.undoLastLine()
-            self.canvas.resetAllLines()
+            text = self.labelDialog.popUp()
+            if text is None:  # 用户点击取消
+                self.canvas.deleteSelected()
+                return
+            # 允许空文本，使用特殊标记
+            if text.strip() == "":
+                text = "[Empty]"
+            self.prevLabelText = text
+
+        shape = self.canvas.setLastLabel(text)
+        if shape:
+            shape.confirmed = True  # 标记为已确认
+            shape.paintLabel = True
+            shape.label_pos = 'top'
+            self.addLabel(shape)
+            self.actions.editMode.setEnabled(True)
+            self.actions.undoLastPoint.setEnabled(False)
+            self.actions.undo.setEnabled(True)
+            self.setDirty()  # 这里会触发自动保存
+        else:
+            self.canvas.undoLastLine()
+            self.canvas.update()
 
     def _update_shape_color(self, shape):
         r, g, b = self._get_rgb_by_label(shape.key_cls, self.kie_mode)
@@ -2047,57 +2081,27 @@ class MainWindow(QMainWindow):
         for item, shape in self.itemsToShapes.items():
             self.canvas.setShapeVisible(shape, value)
 
-    def loadFile(self, filePath=None, isAdjustScale=True):
+    def loadFile(self, filename=None):
         """Load the specified file, or the last opened file if None."""
         self.canvas.shape_move_index = None
         if self.dirty:
             self.mayContinue()
         self.resetState()
         self.canvas.setEnabled(False)
-        if filePath is None:
-            filePath = self.settings.get(SETTING_FILENAME)
+        if filename is None:
+            filename = self.settings.get(SETTING_FILENAME)
 
-        # Make sure that filePath is a regular python string, rather than QString
-        filePath = ustr(filePath)
-        # Fix bug: An index error after select a directory when open a new file.
-        unicodeFilePath = ustr(filePath)
-        # unicodeFilePath = os.path.abspath(unicodeFilePath)
-        # Tzutalin 20160906 : Add file list and dock to move faster
-        # Highlight the file item
-
-        if unicodeFilePath and self.fileListWidget.count() > 0:
-            if unicodeFilePath in self.mImgList:
-                index = self.mImgList.index(unicodeFilePath)
-                fileWidgetItem = self.fileListWidget.item(index)
-                print("unicodeFilePath is", unicodeFilePath)
-                fileWidgetItem.setSelected(True)
-                self.iconlist.clear()
-                self.additems5(None)
-
-                for i in range(5):
-                    item_tooltip = self.iconlist.item(i).toolTip()
-                    # print(i,"---",item_tooltip)
-                    if item_tooltip == ustr(filePath):
-                        titem = self.iconlist.item(i)
-                        titem.setSelected(True)
-                        self.iconlist.scrollToItem(titem)
-                        break
-            else:
-                self.fileListWidget.clear()
-                self.mImgList.clear()
-                self.iconlist.clear()
-
-        # if unicodeFilePath and self.iconList.count() > 0:
-        #     if unicodeFilePath in self.mImgList:
-
+        # Make sure that filename is a regular python string, rather than QString
+        filename = ustr(filename)
+        unicodeFilePath = ustr(filename)
+        
+        # 加载图片
         if unicodeFilePath and os.path.exists(unicodeFilePath):
             self.canvas.verified = False
             cvimg = cv2.imdecode(np.fromfile(unicodeFilePath, dtype=np.uint8), 1)
             height, width, depth = cvimg.shape
             cvimg = cv2.cvtColor(cvimg, cv2.COLOR_BGR2RGB)
-            image = QImage(
-                cvimg.data, width, height, width * depth, QImage.Format_RGB888
-            )
+            image = QImage(cvimg.data, width, height, width * depth, QImage.Format_RGB888)
 
             if image.isNull():
                 self.errorMessage(
@@ -2106,74 +2110,113 @@ class MainWindow(QMainWindow):
                 )
                 self.status("Error reading %s" % unicodeFilePath)
                 return False
+            
             self.status("Loaded %s" % os.path.basename(unicodeFilePath))
             self.image = image
             self.filePath = unicodeFilePath
             self.canvas.loadPixmap(QPixmap.fromImage(image))
 
-            if self.validFilestate(filePath) is True:
+            # 加载缓存的标注数据
+            label_file = os.path.join(os.path.dirname(filename), "Label.txt")
+            if os.path.exists(label_file):
+                try:
+                    with open(label_file, 'r', encoding='utf8') as f:
+                        lines = f.readlines()
+                        current_file_labels = []
+                        reading_current_file = False
+                        
+                        for line in lines:
+                            line = line.strip()
+                            if not line:  # 跳过空行
+                                continue
+                            
+                            if line.startswith("# "):
+                                reading_current_file = line[2:].strip() == filename.strip()
+                            elif line and reading_current_file:
+                                try:
+                                    # 尝试不同的分隔符
+                                    if '\t' in line:
+                                        parts = line.split('\t')
+                                    else:
+                                        parts = line.split(',')
+                                        
+                                    # 清理每个部分的空白
+                                    parts = [p.strip() for p in parts]
+                                    
+                                    # 检查是否有足够的部分
+                                    if len(parts) >= 5:
+                                        x1, y1, x2, y2 = map(float, parts[:4])
+                                        label = parts[4]
+                                        
+                                        # 创建矩形框
+                                        shape = Shape(label=label)
+                                        shape.addPoint(QPointF(x1, y1))
+                                        shape.addPoint(QPointF(x2, y1))
+                                        shape.addPoint(QPointF(x2, y2))
+                                        shape.addPoint(QPointF(x1, y2))
+                                        shape.close()
+                                        
+                                        # 设置形状属性
+                                        shape.difficult = False
+                                        shape.paintLabel = self.displayLabelOption.isChecked()
+                                        shape.line_color = QColor("#00FF00")
+                                        shape.fill_color = QColor(0, 255, 0, 128)
+                                        shape.selected = False
+                                        shape.key_cls = "None"  # 添加 key_cls 属性
+                                        
+                                        # 为 loadLabels 准备数据
+                                        shape_tuple = (
+                                            shape.label,
+                                            [[p.x(), p.y()] for p in shape.points],  # 转换 QPointF 为坐标列表
+                                            shape.line_color.getRgb()[:3],  # 只取 RGB 值
+                                            shape.key_cls,
+                                            shape.difficult
+                                        )
+                                        current_file_labels.append(shape_tuple)
+                                    else:
+                                        print(f"Warning: Invalid line format (not enough values): {line}")
+                                except (ValueError, IndexError) as e:
+                                    print(f"Warning: Error parsing line: {line}")
+                                    print(f"Error details: {str(e)}")
+                                    continue
+                            
+                        # 添加所有形状到画布
+                        if current_file_labels:
+                            self.loadLabels(current_file_labels)
+                            print(f"Successfully loaded {len(current_file_labels)} labels for {filename}")
+                except Exception as e:
+                    print(f"Error loading labels from cache: {str(e)}")
+                    print(f"File: {label_file}")
+                    import traceback
+                    traceback.print_exc()
+
+            if self.validFilestate(filename):
                 self.setClean()
             else:
                 self.dirty = False
                 self.actions.save.setEnabled(True)
-            if len(self.canvas.lockedShapes) != 0:
-                self.actions.save.setEnabled(True)
-                self.setDirty()
+
             self.canvas.setEnabled(True)
-            if isAdjustScale:
-                self.adjustScale(initial=True)
+            self.adjustScale(initial=True)
             self.paintCanvas()
             self.addRecentFile(self.filePath)
             self.toggleActions(True)
 
-            self.showBoundingBoxFromPPlabel(filePath)
-
-            self.setWindowTitle(__appname__ + " " + filePath)
+            self.showBoundingBoxFromPPlabel(filename)
+            self.setWindowTitle(__appname__ + " " + filename)
 
             # Default : select last item if there is at least one item
             if self.labelList.count():
-                self.labelList.setCurrentItem(
-                    self.labelList.item(self.labelList.count() - 1)
-                )
+                self.labelList.setCurrentItem(self.labelList.item(self.labelList.count() - 1))
                 self.labelList.item(self.labelList.count() - 1).setSelected(True)
-                self.indexList.item(self.labelList.count() - 1).setSelected(True)
-
-            # show file list image count
-            select_indexes = self.fileListWidget.selectedIndexes()
-            if len(select_indexes) > 0:
-                self.fileDock.setWindowTitle(
-                    self.fileListName + f" ({select_indexes[0].row() + 1}"
-                    f"/{self.fileListWidget.count()})"
-                )
-            # update show counting
-            self.BoxListDock.setWindowTitle(
-                self.BoxListDockName + f" ({self.BoxList.count()})"
-            )
-            self.labelListDock.setWindowTitle(
-                self.labelListDockName + f" ({self.labelList.count()})"
-            )
 
             self.canvas.setFocus(True)
-
-            if self.bbox_auto_zoom_center:
-                if len(self.canvas.shapes) > 0:
-                    (
-                        center_x,
-                        center_y,
-                        shape_area,
-                    ) = polygon_bounding_box_center_and_area(
-                        self.canvas.shapes[0].points
-                    )
-                    if shape_area < 30000:
-                        zoom_value = 120 * map_value(shape_area, 100, 30000, 20, 0)
-                        self.zoomRequest(zoom_value, QPoint(center_x, center_y))
-                        # print(" =========> ", shape_area, " ==> ", zoom_value)
             return True
         return False
 
-    def showBoundingBoxFromPPlabel(self, filePath):
+    def showBoundingBoxFromPPlabel(self, filename):
         width, height = self.image.width(), self.image.height()
-        imgidx = self.getImglabelidx(filePath)
+        imgidx = self.getImglabelidx(filename)
         shapes = []
         # box['ratio'] of the shapes saved in lockedShapes contains the ratio of the
         # four corner coordinates of the shapes to the height and width of the image
@@ -2216,12 +2259,12 @@ class MainWindow(QMainWindow):
             self.loadLabels(shapes)
             self.canvas.verified = False
 
-    def validFilestate(self, filePath):
-        if filePath in self.fileStatedict.keys() and self.fileStatedict[filePath] == 1:
+    def validFilestate(self, filename):
+        if filename in self.fileStatedict.keys() and self.fileStatedict[filename] == 1:
             return True
         elif (
-            self.getImglabelidx(filePath) in self.fileStatedict.keys()
-            and self.fileStatedict[self.getImglabelidx(filePath)] == 1
+            self.getImglabelidx(filename) in self.fileStatedict.keys()
+            and self.fileStatedict[self.getImglabelidx(filename)] == 1
         ):
             return True
         else:
@@ -2269,12 +2312,13 @@ class MainWindow(QMainWindow):
             event.ignore()
         else:
             settings = self.settings
-            # If it loads images from dir, don't load it at the beginning
-            if self.dirname is None:
-                settings[SETTING_FILENAME] = self.filePath if self.filePath else ""
+            # 保存当前目录路径
+            if self.lastOpenDir and os.path.exists(self.lastOpenDir):
+                settings[SETTING_LAST_OPEN_DIR] = self.lastOpenDir
             else:
-                settings[SETTING_FILENAME] = ""
+                settings[SETTING_LAST_OPEN_DIR] = ""
 
+            # 保存其他设置
             settings[SETTING_WIN_SIZE] = self.size()
             settings[SETTING_WIN_POSE] = self.pos()
             settings[SETTING_WIN_STATE] = self.saveState()
@@ -2282,20 +2326,14 @@ class MainWindow(QMainWindow):
             settings[SETTING_FILL_COLOR] = self.fillColor
             settings[SETTING_RECENT_FILES] = self.recentFiles
             settings[SETTING_ADVANCE_MODE] = not self._beginner
+            
             if self.defaultSaveDir and os.path.exists(self.defaultSaveDir):
                 settings[SETTING_SAVE_DIR] = ustr(self.defaultSaveDir)
             else:
                 settings[SETTING_SAVE_DIR] = ""
 
-            if self.lastOpenDir and os.path.exists(self.lastOpenDir):
-                settings[SETTING_LAST_OPEN_DIR] = self.lastOpenDir
-            else:
-                settings[SETTING_LAST_OPEN_DIR] = ""
-
-            settings[SETTING_PAINT_LABEL] = self.displayLabelOption.isChecked()
-            settings[SETTING_PAINT_INDEX] = self.displayIndexOption.isChecked()
-            settings[SETTING_DRAW_SQUARE] = self.drawSquaresOption.isChecked()
             settings.save()
+            
             try:
                 self.saveLabelFile()
             except Exception:
@@ -2522,11 +2560,67 @@ class MainWindow(QMainWindow):
     def updateFileListIcon(self, filename):
         pass
 
-    def saveFile(self, _value=False, mode="Manual"):
-        # Manual mode is used for users click "Save" manually,which will change the state of the image
-        if self.filePath:
-            imgidx = self.getImglabelidx(self.filePath)
-            self._saveFile(imgidx, mode=mode)
+    def saveFile(self, _value=False):
+        """
+        保存标注信息到JSON文件
+        """
+        if self.filePath is None:
+            return
+
+        # 获取当前图片的标注信息
+        shapes = []
+        for shape in self.canvas.shapes:
+            points = shape.points
+            # 只保存左上和右下点的坐标
+            x1 = min(p.x() for p in points)
+            y1 = min(p.y() for p in points)
+            x2 = max(p.x() for p in points)
+            y2 = max(p.y() for p in points)
+            
+            shape_info = {
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "text": shape.label,  # 保存标注的文本
+                "color": shape.line_color.name()  # 保存框的颜色
+            }
+            shapes.append(shape_info)
+
+        # 读取已有的JSON文件(如果存在)
+        json_file = os.path.splitext(self.filePath)[0] + '.json'
+        try:
+            if os.path.exists(json_file):
+                with open(json_file, 'r', encoding='utf8') as f:
+                    json_data = json.load(f)
+            else:
+                json_data = {}
+        except:
+            json_data = {}
+
+        # 更新当前图片的标注信息
+        json_data[self.filePath] = shapes
+
+        # 保存到JSON文件
+        try:
+            with open(json_file, 'w', encoding='utf8') as f:
+                json.dump(json_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.errorMessage('Error saving label data', str(e))
+            return False
+
+        # 同时保存到 Label.txt 作为缓存
+        self.saveLabelFile()
+        
+        self.setClean()
+        return True
+
+    def autoSaving(self):
+        """
+        自动保存
+        """
+        if self.filePath and self.dirty:
+            self.saveFile()
 
     def saveLockedShapes(self):
         self.canvas.lockedShapes = []
@@ -2646,26 +2740,12 @@ class MainWindow(QMainWindow):
         proc = QProcess()
         proc.startDetached(os.path.abspath(__file__))
 
-    def mayContinue(self):  #
-        if not self.dirty:
-            return True
-        else:
-            if self.autoSaveUnsavedChangesOption.isChecked():
-                self.canvas.isInTheSameImage = True
-                self.saveFile()
-                self.canvas.isInTheSameImage = False
-                return True
-
-            discardChanges = self.discardChangesDialog()
-            if discardChanges == QMessageBox.No:
-                return True
-            elif discardChanges == QMessageBox.Yes:
-                self.canvas.isInTheSameImage = True
-                self.saveFile()
-                self.canvas.isInTheSameImage = False
-                return True
-            else:
-                return False
+    def mayContinue(self):
+        """
+        检查是否可以继续
+        由于我们现在自动保存，所以总是返回 True
+        """
+        return True
 
     def discardChangesDialog(self):
         yes, no, cancel = QMessageBox.Yes, QMessageBox.No, QMessageBox.Cancel
@@ -2695,293 +2775,67 @@ class MainWindow(QMainWindow):
             self.setDirty()
 
     def deleteSelectedShape(self):
-        self.remLabels(self.canvas.deleteSelected())
-        self.actions.undo.setEnabled(True)
-        self.setDirty()
-        if self.noShapes():
-            for action in self.actions.onShapesPresent:
-                action.setEnabled(False)
-        self.BoxListDock.setWindowTitle(
-            self.BoxListDockName + f" ({self.BoxList.count()})"
-        )
-        self.labelListDock.setWindowTitle(
-            self.labelListDockName + f" ({self.labelList.count()})"
-        )
-
-    def chshapeLineColor(self):
-        color = self.colorDialog.getColor(
-            self.lineColor, "Choose line color", default=DEFAULT_LINE_COLOR
-        )
-        if color:
-            for shape in self.canvas.selectedShapes:
-                shape.line_color = color
-            self.canvas.update()
-            self.setDirty()
-
-    def chshapeFillColor(self):
-        color = self.colorDialog.getColor(
-            self.fillColor, "Choose fill color", default=DEFAULT_FILL_COLOR
-        )
-        if color:
-            for shape in self.canvas.selectedShapes:
-                shape.fill_color = color
-            self.canvas.update()
-            self.setDirty()
-
-    def copyShape(self):
-        self.canvas.endMove(copy=True)
-        self.addLabel(self.canvas.selectedShape)
-        self.setDirty()
-
-    def moveShape(self):
-        self.canvas.endMove(copy=False)
-        self.setDirty()
-
-    def loadPredefinedClasses(self, predefClassesFile):
-        if os.path.exists(predefClassesFile) is True:
-            with codecs.open(predefClassesFile, "r", "utf8") as f:
-                for line in f:
-                    line = line.strip()
-                    if self.labelHist is None:
-                        self.labelHist = [line]
-                    else:
-                        self.labelHist.append(line)
-
-    def togglePaintLabelsOption(self):
-        self.displayIndexOption.setChecked(False)
-        for shape in self.canvas.shapes:
-            shape.paintLabel = self.displayLabelOption.isChecked()
-            shape.paintIdx = self.displayIndexOption.isChecked()
-        self.canvas.repaint()
-
-    def togglePaintIndexOption(self):
-        self.displayLabelOption.setChecked(False)
-        for shape in self.canvas.shapes:
-            shape.paintLabel = self.displayLabelOption.isChecked()
-            shape.paintIdx = self.displayIndexOption.isChecked()
-        self.canvas.repaint()
-
-    def toogleDrawSquare(self):
-        self.canvas.setDrawingShapeToSquare(self.drawSquaresOption.isChecked())
-
-    def additems(self, dirpath):
-        for file in self.mImgList:
-            pix = QPixmap(file)
-            _, filename = os.path.split(file)
-            filename, _ = os.path.splitext(filename)
-            item = QListWidgetItem(
-                QIcon(
-                    pix.scaled(100, 100, Qt.IgnoreAspectRatio, Qt.FastTransformation)
-                ),
-                filename[:10],
-            )
-            item.setToolTip(file)
-            self.iconlist.addItem(item)
-
-    def additems5(self, dirpath):
-        for file in self.mImgList5:
-            pix = QPixmap(file)
-            _, filename = os.path.split(file)
-            filename, _ = os.path.splitext(filename)
-            pfilename = filename[:10]
-            if len(pfilename) < 10:
-                lentoken = 12 - len(pfilename)
-                prelen = lentoken // 2
-                bfilename = prelen * " " + pfilename + (lentoken - prelen) * " "
-            # item = QListWidgetItem(QIcon(pix.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)),filename[:10])
-            item = QListWidgetItem(
-                QIcon(
-                    pix.scaled(100, 100, Qt.IgnoreAspectRatio, Qt.FastTransformation)
-                ),
-                pfilename,
-            )
-            # item.setForeground(QBrush(Qt.white))
-            item.setToolTip(file)
-            self.iconlist.addItem(item)
-        owidth = 0
-        for index in range(len(self.mImgList5)):
-            item = self.iconlist.item(index)
-            itemwidget = self.iconlist.visualItemRect(item)
-            owidth += itemwidget.width()
-        self.iconlist.setMinimumWidth(owidth + 50)
-
-    def gen_quad_from_poly(self, poly):
         """
-        Generate min area quad from poly.
+        Delete the box selected in the detection box position list
         """
-        point_num = poly.shape[0]
-        min_area_quad = np.zeros((4, 2), dtype=np.float32)
-        rect = cv2.minAreaRect(
-            poly.astype(np.int32)
-        )  # (center (x,y), (width, height), angle of rotation)
-        box = np.array(cv2.boxPoints(rect))
-
-        first_point_idx = 0
-        min_dist = 1e4
-        for i in range(4):
-            dist = (
-                np.linalg.norm(box[(i + 0) % 4] - poly[0])
-                + np.linalg.norm(box[(i + 1) % 4] - poly[point_num // 2 - 1])
-                + np.linalg.norm(box[(i + 2) % 4] - poly[point_num // 2])
-                + np.linalg.norm(box[(i + 3) % 4] - poly[-1])
-            )
-            if dist < min_dist:
-                min_dist = dist
-                first_point_idx = i
-        for i in range(4):
-            min_area_quad[i] = box[(first_point_idx + i) % 4]
-
-        bbox_new = min_area_quad.tolist()
-        bbox = []
-
-        for box in bbox_new:
-            box = list(map(int, box))
-            bbox.append(box)
-
-        return bbox
-
-    def getImglabelidx(self, filePath):
-        if platform.system() == "Windows":
-            spliter = "\\"
-        else:
-            spliter = "/"
-        filepathsplit = filePath.split(spliter)[-2:]
-        if len(filepathsplit) == 1:
-            return filePath
-        return filepathsplit[0] + "/" + filepathsplit[1]
-
-    def autoRecognition(self):
-        assert self.mImgList is not None
-        print("Using model from ", self.model)
-
-        uncheckedList = [i for i in self.mImgList if i not in self.fileStatedict.keys()]
-        self.autoDialog = AutoDialog(
-            parent=self, ocr=self.ocr, mImgList=uncheckedList, lenbar=len(uncheckedList)
-        )
-        self.autoDialog.popUp()
-        self.currIndex = len(self.mImgList) - 1
-        self.loadFile(self.filePath)  # ADD
-        self.haveAutoReced = True
-        self.AutoRecognition.setEnabled(False)
-        self.actions.AutoRec.setEnabled(False)
-        self.setDirty()
-        self.saveCacheLabel()
-
-        self.init_key_list(self.Cachelabel)
-
-    def reRecognition(self):
-        img = cv2.imdecode(np.fromfile(self.filePath, dtype=np.uint8), 1)
-        # org_box = [dic['points'] for dic in self.PPlabel[self.getImglabelidx(self.filePath)]]
-        if self.canvas.shapes:
-            self.result_dic = []
-            self.result_dic_locked = (
-                []
-            )  # result_dic_locked stores the ocr result of self.canvas.lockedShapes
-            rec_flag = 0
-            for shape in self.canvas.shapes:
-                box = [[int(p.x()), int(p.y())] for p in shape.points]
-                kie_cls = shape.key_cls
-
-                if len(box) > 4:
-                    box = self.gen_quad_from_poly(np.array(box))
-                assert len(box) == 4
-
-                img_crop = get_rotate_crop_image(img, np.array(box, np.float32))
-                if img_crop is None:
-                    msg = (
-                        "Can not recognise the detection box in "
-                        + self.filePath
-                        + ". Please change manually"
-                    )
-                    QMessageBox.information(self, "Information", msg)
-                    return
-                result = self.ocr.ocr(img_crop, cls=True, det=False)[0]
-                if result[0][0] != "":
-                    if shape.line_color == DEFAULT_LOCK_COLOR:
-                        shape.label = result[0][0]
-                        result.insert(0, box)
-                        if self.kie_mode:
-                            result.append(kie_cls)
-                        self.result_dic_locked.append(result)
-                    else:
-                        result.insert(0, box)
-                        if self.kie_mode:
-                            result.append(kie_cls)
-                        self.result_dic.append(result)
-                else:
-                    print("Can not recognise the box")
-                    if shape.line_color == DEFAULT_LOCK_COLOR:
-                        shape.label = result[0][0]
-                        if self.kie_mode:
-                            self.result_dic_locked.append(
-                                [box, (self.noLabelText, 0), kie_cls]
-                            )
-                        else:
-                            self.result_dic_locked.append([box, (self.noLabelText, 0)])
-                    else:
-                        if self.kie_mode:
-                            self.result_dic.append(
-                                [box, (self.noLabelText, 0), kie_cls]
-                            )
-                        else:
-                            self.result_dic.append([box, (self.noLabelText, 0)])
-                try:
-                    if self.noLabelText == shape.label or result[1][0] == shape.label:
-                        print("label no change")
-                    else:
-                        rec_flag += 1
-                except IndexError as e:
-                    print("Can not recognise the box")
-            if (len(self.result_dic) > 0 and rec_flag > 0) or self.canvas.lockedShapes:
-                self.canvas.isInTheSameImage = True
-                self.saveFile(mode="Auto")
-                self.loadFile(self.filePath, isAdjustScale=False)
-                self.canvas.isInTheSameImage = False
-                self.setDirty()
-            elif len(self.result_dic) == len(self.canvas.shapes) and rec_flag == 0:
-                if self.lang == "ch":
-                    QMessageBox.information(self, "Information", "识别结果保持一致！")
-                else:
-                    QMessageBox.information(
-                        self, "Information", "The recognition result remains unchanged!"
-                    )
-            else:
-                print("Can not recgonise in ", self.filePath)
-        else:
-            QMessageBox.information(self, "Information", "Draw a box!")
-
-    def singleRerecognition(self):
-        img = cv2.imdecode(np.fromfile(self.filePath, dtype=np.uint8), 1)
-        for shape in self.canvas.selectedShapes:
-            box = [[int(p.x()), int(p.y())] for p in shape.points]
-            if len(box) > 4:
-                box = self.gen_quad_from_poly(np.array(box))
-            assert len(box) == 4
-            img_crop = get_rotate_crop_image(img, np.array(box, np.float32))
-            if img_crop is None:
-                msg = (
-                    "Can not recognise the detection box in "
-                    + self.filePath
-                    + ". Please change manually"
-                )
-                QMessageBox.information(self, "Information", msg)
+        try:
+            # 如果没有选中的框，直接返回
+            if not self.BoxList.selectedItems():
                 return
-            result = self.ocr.ocr(img_crop, cls=True, det=False)[0]
-            if result[0][0] != "":
-                result.insert(0, box)
-                print("result in reRec is ", result)
-                if result[1][0] == shape.label:
-                    print("label no change")
-                else:
-                    shape.label = result[1][0]
-            else:
-                print("Can not recognise the box")
-                if self.noLabelText == shape.label:
-                    print("label no change")
-                else:
-                    shape.label = self.noLabelText
-            self.singleLabel(shape)
-            self.setDirty()
+            
+            # 获取选中的框
+            selected_item = self.BoxList.selectedItems()[0]
+            if selected_item in self.itemsToShapesbox:
+                shape = self.itemsToShapesbox[selected_item]
+                
+                # 确保在 canvas 中选中这个形状
+                self.canvas.selectedShapes = [shape]
+                
+                # 从 canvas 中删除
+                if shape in self.canvas.shapes:
+                    self.canvas.shapes.remove(shape)
+                
+                # 从标签列表中删除
+                if shape in self.shapesToItems:
+                    label_item = self.shapesToItems[shape]
+                    self.labelList.takeItem(self.labelList.row(label_item))
+                    del self.shapesToItems[shape]
+                    del self.itemsToShapes[label_item]
+                
+                # 从框列表中删除
+                self.BoxList.takeItem(self.BoxList.row(selected_item))
+                del self.shapesToItemsbox[shape]
+                del self.itemsToShapesbox[selected_item]
+                
+                # 清除 canvas 的选中状态
+                self.canvas.selectedShapes = []
+                
+                # 更新索引列表
+                self.updateIndexList()
+                
+                # 更新画布
+                self.canvas.update()
+                
+                # 设置修改标志并保存
+                self.setDirty()
+                
+                # 更新停靠窗口标题中的框计数
+                self.BoxListDock.setWindowTitle(
+                    self.BoxListDockName + f" ({self.BoxList.count()})"
+                )
+                self.labelListDock.setWindowTitle(
+                    self.labelListDockName + f" ({self.labelList.count()})"
+                )
+                
+                # 如果没有形状了，禁用相关动作
+                if self.noShapes():
+                    for action in self.actions.onShapesPresent:
+                        action.setEnabled(False)
+                        
+        except Exception as e:
+            print(f"Warning: Failed to delete shape - {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def TableRecognition(self):
         """
@@ -3347,22 +3201,56 @@ class MainWindow(QMainWindow):
                 f.write(str(self.fileStatedict[key]) + "\n")
 
     def loadLabelFile(self, labelpath):
+        """
+        加载标注文件
+        """
         labeldict = {}
         if not os.path.exists(labelpath):
-            f = open(labelpath, "w", encoding="utf-8")
+            # 如果文件不存在，创建一个空文件
+            with open(labelpath, "w", encoding="utf-8") as f:
+                pass
+            return labeldict
 
-        else:
+        try:
             with open(labelpath, "r", encoding="utf-8") as f:
-                data = f.readlines()
-                for each in data:
-                    file, label = each.split("\t")
-                    if label:
-                        label = label.replace("false", "False")
-                        label = label.replace("true", "True")
-                        label = label.replace("null", "None")
-                        labeldict[file] = eval(label)
-                    else:
-                        labeldict[file] = []
+                current_file = None
+                current_labels = []
+                
+                for line in f:
+                    line = line.strip()
+                    if not line:  # 跳过空行
+                        continue
+                    
+                    if line.startswith("# "):  # 文件标识行
+                        if current_file and current_labels:
+                            # 保存前一个文件的标注
+                            labeldict[current_file] = current_labels
+                        current_file = line[2:]  # 去掉"# "
+                        current_labels = []
+                    else:  # 标注行
+                        try:
+                            x1, y1, x2, y2, label = line.split(',')
+                            label_info = {
+                                "transcription": label,
+                                "points": [[float(x1), float(y1)],
+                                         [float(x2), float(y1)],
+                                         [float(x2), float(y2)],
+                                         [float(x1), float(y2)]],
+                                "difficult": False
+                            }
+                            current_labels.append(label_info)
+                        except ValueError:
+                            # 如果行格式不正确，跳过该行
+                            continue
+
+                # 保存最后一个文件的标注
+                if current_file and current_labels:
+                    labeldict[current_file] = current_labels
+
+        except Exception as e:
+            print(f"Error loading label file: {str(e)}")
+            return {}
+
         return labeldict
 
     def savePPlabel(self, mode="Manual"):
@@ -3387,8 +3275,53 @@ class MainWindow(QMainWindow):
                 f.write(json.dumps(self.Cachelabel[key], ensure_ascii=False) + "\n")
 
     def saveLabelFile(self):
-        self.saveFilestate()
-        self.savePPlabel()
+        """
+        保存标注到 Label.txt 文件
+        """
+        if self.filePath and self.canvas.shapes:
+            label_file = os.path.join(os.path.dirname(self.filePath), "Label.txt")
+            curr_file_labels = []
+            
+            # 读取现有的标注
+            existing_labels = {}
+            if os.path.exists(label_file):
+                with open(label_file, 'r', encoding='utf8') as f:
+                    lines = f.readlines()
+                    current_file = None
+                    current_labels = []
+                    for line in lines:
+                        line = line.strip()
+                        if line.startswith("# "):  # 文件标识行
+                            if current_file and current_labels:
+                                existing_labels[current_file] = current_labels
+                            current_file = line[2:]  # 去掉"# "
+                            current_labels = []
+                        elif line:  # 标注行
+                            current_labels.append(line)
+                    if current_file and current_labels:
+                        existing_labels[current_file] = current_labels
+
+            # 获取当前文件的标注
+            for shape in self.canvas.shapes:
+                points = shape.points
+                x1 = min(p.x() for p in points)
+                y1 = min(p.y() for p in points)
+                x2 = max(p.x() for p in points)
+                y2 = max(p.y() for p in points)
+                # 特殊处理空文本框
+                label = "" if shape.label == "[Empty]" else shape.label
+                line = f"{x1},{y1},{x2},{y2},{label}\n"
+                curr_file_labels.append(line)
+
+            # 更新当前文件的标注
+            existing_labels[self.filePath] = curr_file_labels
+
+            # 写入所有标注
+            with open(label_file, 'w', encoding='utf8') as f:
+                for file_path, labels in existing_labels.items():
+                    f.write(f"# {file_path}\n")  # 写入文件标识
+                    f.writelines(labels)  # 写入该文件的所有标注
+                    f.write("\n")  # 文件之间空一行
 
     def saveRecResult(self):
         if {} in [self.PPlabelpath, self.PPlabel, self.fileStatedict]:
@@ -3571,6 +3504,116 @@ class MainWindow(QMainWindow):
             print(shape.points)
             self.updateBoxlist()
             self.setDirty()
+
+    def updateRecResult(self):
+        if self.canvas.current_text():
+            text = self.canvas.current_text()
+            # 设置支持多语言的字体
+            font = QFont()
+            font_families = [
+                "Estrangelo Edessa",
+                "Noto Sans Syriac",
+                "East Syriac Adiabene",
+                "Serto Jerusalem",
+                "Microsoft Sans Serif",
+                "Arial Unicode MS",
+                "Arial"
+            ]
+            
+            # 修正字体检查方法
+            db = QFontDatabase()
+            available_families = db.families()
+            for family in font_families:
+                if family in available_families:
+                    font.setFamily(family)
+                    break
+                
+            font.setPointSize(12)  # 设置合适的字体大小
+            
+            # 启用复杂文本布局
+            self.result_text.setLayoutDirection(Qt.RightToLeft)  
+            self.result_text.setFont(font)
+            self.result_text.setText(text)
+            self.result_text.repaint()
+
+    def setRecResult(self, text):
+        if text:
+            # 设置支持多语言的字体
+            font = QFont()
+            # 尝试使用支持叙利亚文的字体
+            font_families = [
+                "Estrangelo Edessa",
+                "Noto Sans Syriac",
+                "East Syriac Adiabene", 
+                "Serto Jerusalem",
+                "Microsoft Sans Serif",
+                "Arial Unicode MS",
+                "Arial"
+            ]
+            
+            for family in font_families:
+                if QFontDatabase().hasFamily(family):
+                    font.setFamily(family)
+                    break
+                
+            font.setPointSize(12)
+            
+            # 启用复杂文本布局
+            self.result_text.setLayoutDirection(Qt.RightToLeft)
+            self.result_text.setFont(font)
+            self.result_text.setText(text)
+            self.result_text.repaint()
+            
+            if hasattr(self.canvas, 'current_text_item'):
+                # 同样设置画布文本的字体
+                self.canvas.current_text_item.setFont(font)
+                self.canvas.current_text_item.setText(text)
+
+    def updateKeyList(self, shape):
+        if self.kie_mode:
+            self.keyList.clear()
+            self.existed_key_cls_set.add(shape.key_cls)
+            self.keyList.addItem(shape.key_cls)
+            self.keyList.setItemLabel(self.keyList.currentItem(), shape.key_cls, self._get_rgb_by_label(shape.key_cls, self.kie_mode))
+
+    def saveFileAsJson(self):
+        """
+        从 Label.txt 中提取当前文件的标注并保存为 JSON
+        """
+        if self.filePath:
+            label_file = os.path.join(os.path.dirname(self.filePath), "Label.txt")
+            if not os.path.exists(label_file):
+                return
+                
+            # 从 Label.txt 中读取当前文件的标注
+            shapes = []
+            with open(label_file, 'r', encoding='utf8') as f:
+                lines = f.readlines()
+                reading_current_file = False
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith("# "):
+                        reading_current_file = line[2:] == self.filePath
+                    elif line and reading_current_file:
+                        x1, y1, x2, y2, label = line.split(',')
+                        shape_info = {
+                            "x1": float(x1),
+                            "y1": float(y1),
+                            "x2": float(x2),
+                            "y2": float(y2),
+                            "text": label,
+                            "color": "#00ff00"  # 使用默认颜色
+                        }
+                        shapes.append(shape_info)
+
+            # 保存到 JSON 文件
+            json_file = os.path.splitext(self.filePath)[0] + '.json'
+            json_data = {self.filePath: shapes}
+            try:
+                with open(json_file, 'w', encoding='utf8') as f:
+                    json.dump(json_data, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                self.errorMessage('Error saving label data', str(e))
 
 
 def inverted(color):
