@@ -1644,47 +1644,55 @@ class MainWindow(QMainWindow):
                 self.updateKeyList(selected_shapes[0])
 
     def addLabel(self, shape):
+        """
+        添加标签到列表
+        """
         shape.paintLabel = self.displayLabelOption.isChecked()
         shape.paintIdx = self.displayIndexOption.isChecked()
-
+        
         # 创建标签项，特殊处理空文本框
         display_label = "[空文本框]" if shape.label == "[Empty]" else shape.label
         item = HashableQListWidgetItem(display_label)
         
-        # 为空文本框设置特殊样式
-        if shape.label == "[Empty]":
-            item.setForeground(QColor(128, 128, 128))  # 灰色文本
-            font = item.font()
-            font.setItalic(True)  # 斜体
-            item.setFont(font)
-
-        self.itemsToShapes[item] = shape
-        self.shapesToItems[shape] = item
+        # 设置字体
+        font = QFont()
+        # 尝试使用支持叙利亚文的字体
+        font_families = [
+            "Estrangelo Edessa",
+            "Noto Sans Syriac",
+            "East Syriac Adiabene",
+            "Serto Jerusalem",
+            "Microsoft Sans Serif",
+            "Arial Unicode MS",
+            "Arial"
+        ]
         
-        # 添加索引
-        current_index = QListWidgetItem(str(self.labelList.count()))
-        current_index.setTextAlignment(Qt.AlignHCenter)
-        self.indexList.addItem(current_index)
+        # 修正字体检查方法
+        db = QFontDatabase()
+        available_families = db.families()
+        for family in font_families:
+            if family in available_families:
+                font.setFamily(family)
+                break
+        
+        font.setPointSize(12)
+        item.setFont(font)
+        
+        # 设置文本方向为从右到左
+        item.setTextAlignment(Qt.AlignRight)
+        
+        # 其他设置保持不变
         self.labelList.addItem(item)
-
-        # 添加坐标框信息
-        item = HashableQListWidgetItem(
-            str([(int(p.x()), int(p.y())) for p in shape.points])
-        )
-        if shape.label == "[Empty]":
-            item.setForeground(QColor(128, 128, 128))
-            font = item.font()
-            font.setItalic(True)
-            item.setFont(font)
-            
+        self.shapesToItems[shape] = item
+        self.itemsToShapes[item] = shape
+        
+        # 为框列表创建项
+        item = HashableQListWidgetItem(str([(int(p.x()), int(p.y())) for p in shape.points]))
+        item.setFont(font)  # 使用相同的字体
+        self.BoxList.addItem(item)
         self.itemsToShapesbox[item] = shape
         self.shapesToItemsbox[shape] = item
-        self.BoxList.addItem(item)
         
-        for action in self.actions.onShapesPresent:
-            action.setEnabled(True)
-        self.updateComboBox()
-
         # 更新显示计数
         self.BoxListDock.setWindowTitle(
             self.BoxListDockName + f" ({self.BoxList.count()})"
