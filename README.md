@@ -2,6 +2,21 @@ English | [简体中文](README_ch.md)
 
 # PPOCRLabelv2
 
+## 0. Quick Start
+
+### Windows
+
+Double click `startpwsh.bat` to start a terminal, and paste the following commands:
+
+```pwsh
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force; .\setup.ps1
+```
+
+### MacOS
+
+TODO
+
+
 ## 1. Installation and Run
 
 ### 1.1 Install PaddlePaddle
